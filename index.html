@@ -2811,27 +2811,9 @@ function spawnWave(){
 }
 function getBossName(stage){return['💀 DARK THUG','🔥 IRON CRUSHER','⚡ DEATH LORD','💣 WAR MACHINE','🧊 FROST KING','🤖 CYBER TITAN','🐉 DRAGON FIST','👑 LORD ZERO','🌿 PÂNTANO REI','🗿 GUARDIÃO DE PEDRA','💎 SENHOR CRISTAL','🏔️ TITÃ DA MONTANHA','🌋 FÚRIA DO VULCÃO','☢️ MUTANTE TÓXICO','☁️ ARAUTO CELESTIAL','⚓ CAPITÃO FANTASMA','🏜️ SOMBRA DO DESFILADEIRO','🛰️ MÁQUINA ESPACIAL','❄️ REI DO GELO ETERNO','🏛️ GUARDIÃO ANCIÃO','🕸️ SENHOR DO ABISMO','🏝️ FÚRIA TROPICAL','🏭 COLOSSO DE FERRO','🦴 REI OSSUDO','💠 ENTIDADE DIGITAL'][(stage-1)%25];}
 
-function pickNearestTarget(ex,ey){
-  // no solo/campanha só existe o próprio jogador. No co-op online, o HOST escolhe
-  // o alvo mais perto entre ele mesmo e cada convidado, pra os zumbis perseguirem
-  // quem estiver mais próximo — não só sempre o host.
-  let best = {x:player.x+player.w/2, y:player.y+player.h/2, isHost:true, guestId:null, dead:!!player.dead};
-  if(GS.mode==='online_zombie' && netIsHost){
-    let bestDist = Math.hypot(best.x-ex, best.y-ey);
-    for(const gid in netPlayers){
-      const g=netPlayers[gid];
-      if(g.dead) continue;
-      const gx=(g.x||0)+8, gy=(g.y||0)+10;
-      const d=Math.hypot(gx-ex, gy-ey);
-      if(d<bestDist){ bestDist=d; best={x:gx,y:gy,isHost:false,guestId:gid,dead:false}; }
-    }
-  }
-  return best;
-}
 function updateEnemies(dt){
   if(!currentLevel||!player)return;
   const stagePower = Math.min(2.4, 1 + (GS.stage||1) * 0.045);
-  const isCoopHost = (GS.mode==='online_zombie' && netIsHost);
   const playerCx = player.x + player.w/2, playerCy = player.y + player.h/2;
 
   function hasWallBetween(e,px,py){
@@ -2856,12 +2838,11 @@ function updateEnemies(dt){
     if(e.shootTimer>0)e.shootTimer--;
 
     const ex=e.x+e.w/2, ey=e.y+e.h/2;
-    const target = isCoopHost ? pickNearestTarget(ex,ey) : {x:playerCx,y:playerCy,isHost:true,guestId:null,dead:!!player.dead};
-    const px=target.x, py=target.y;
+    const px=playerCx, py=playerCy;
     const dx=px-ex, dy=py-ey, dist=Math.hypot(dx,dy);
     // perseguir só depende da distância — "linha de visão" (parede no meio) só bloqueia o TIRO,
     // nunca impede o inimigo de vir na sua direção (senão ele fica "burro" perto de plataformas)
-    const seePlayer = dist < e.aggroRange && !target.dead;
+    const seePlayer = dist < e.aggroRange && !player.dead;
     const clearShot = !hasWallBetween(e,px,py);
     const dirToPlayer = dx < 0 ? -1 : 1;
 
@@ -2877,8 +2858,7 @@ function updateEnemies(dt){
       if(dist < (e.type==='boss'?34:e.w+12) && e.attackCooldown<=0 && Math.abs(dy)<e.h+12){
         e.attackTimer = 16; e.attackCooldown = Math.max(24, 56 - (GS.stage||1)*2 - (e.type==='boss'?18:0)); e.state='attack';
         const dmg = e.damage * (e.type==='boss'?1.18:1);
-        if(target.isHost){ if(!player.dead&&player.invincible<=0) playerHurt(dmg); }
-        else if(target.guestId){ netSend({type:'player_hurt', targetId:target.guestId, damage:dmg}); }
+        if(!player.dead&&player.invincible<=0) playerHurt(dmg);
         spawnParticles(px,py,5,e.type==='boss'?'#ff0000':'#ff4444',3,20);
       }
       if(e.ranged && clearShot && e.shootTimer<=0 && dist<175 && Math.abs(dy)<80){
@@ -3352,28 +3332,20 @@ function spawnZombie(){
   const dmgMult=Math.min(2.5, 1+t*0.015);
   z.hp=Math.round(z.hp*hpMult); z.maxHp=z.hp; z.damage=Math.round(z.damage*dmgMult);
   z.dir=fromRight?-1:1;
-  if(GS.mode==='online_zombie') z.netId=nextZombieNetId++;
   enemies.push(z);
 }
 function updateZombieMode(dt){
+  // usado só no modo solo (offline). No modo online co-op é o SERVIDOR que roda a invasão
+  // (veja server.js: tickMatch) — essa função nem é chamada nesse modo.
   GS.zombieTimer+=dt;
   GS.zombieSpawnTimer-=dt;
-  const isOnline = GS.mode==='online_zombie';
-  // no modo online co-op, mais jogadores na sala = mais zumbis vindo (nunca para) —
-  // mas com um teto bem mais baixo que o solo, pra não pesar no celular de ninguém
-  // nem no tamanho da mensagem que viaja pela internet toda hora.
-  const playerCount = isOnline ? (1+Object.keys(netPlayers).length) : 1;
-  const spawnInterval = isOnline
-    ? Math.max(0.75, 2.4-GS.zombieTimer*0.012)/Math.sqrt(playerCount)
-    : Math.max(0.5, 2.2-GS.zombieTimer*0.015);
-  const aliveCap = isOnline ? Math.min(10*playerCount, 28) : 40;
+  const spawnInterval=Math.max(0.5, 2.2-GS.zombieTimer*0.015);
+  const aliveCap=40;
   const aliveCount=enemies.reduce((n,e)=>n+(e.alive?1:0),0);
   if(GS.zombieSpawnTimer<=0 && aliveCount<aliveCap){
     GS.zombieSpawnTimer=spawnInterval;
-    const burst = isOnline
-      ? Math.min(2, 1+Math.floor(GS.zombieTimer/60))
-      : Math.max(1,Math.round((1+Math.floor(GS.zombieTimer/45))*Math.max(1,playerCount*0.7)));
-    for(let i=0;i<Math.min(burst, isOnline?3:5*playerCount);i++) spawnZombie();
+    const burst=Math.max(1,Math.round(1+Math.floor(GS.zombieTimer/45)));
+    for(let i=0;i<Math.min(burst,5);i++) spawnZombie();
   }
   const badge=document.getElementById('stageBadge'); if(badge) badge.textContent='🧟 '+formatTime(GS.zombieTimer);
   // limpeza de memória: só remove os já mortos, NUNCA um zumbi ainda vivo (esse era o bug de sumirem no meio do mapa)
@@ -3398,12 +3370,11 @@ function updateZombieMode(dt){
 // TROQUE ISSO pela URL do SEU servidor depois de publicar no Render.
 // Local pra testar: 'ws://localhost:3000'
 // No Render, sua URL vai ser algo como: 'wss://meu-jogo-servidor.onrender.com'
-const WS_URL = 'wss://iron-fist.onrender.com/';
+const WS_URL = 'wss://TROQUE-PELA-URL-DO-SEU-SERVIDOR.onrender.com';
 // mesma URL do servidor, só que em http(s) — usada pra login/conta/ranking (banco de dados)
 const HTTP_URL = WS_URL.replace(/^wss:/,'https:').replace(/^ws:/,'http:');
 
-let ws=null, netId=null, netRoomCode=null, netIsHost=false, netName='Jogador', netPlayers={}, netSendTimer=0;
-let netZombieBroadcastTimer=0, nextZombieNetId=1;
+let ws=null, netId=null, netRoomCode=null, netName='Jogador', netPlayers={}, netSendTimer=0;
 
 function netConnect(onOpen){
   if(ws && (ws.readyState===0||ws.readyState===1)) { onOpen&&onOpen(); return; }
@@ -3430,16 +3401,16 @@ function netJoinRoom(){
 function netLeaveRoom(){
   netSend({type:'leave_room'});
   if(ws){ ws.close(); ws=null; }
-  netRoomCode=null; netId=null; netPlayers={}; netIsHost=false; myReady=false; roomReadyMap={};
+  netRoomCode=null; netId=null; netPlayers={}; myReady=false; roomReadyMap={};
   document.getElementById('onlineWaitPanel').style.display='none';
   document.getElementById('onlineSetupPanel').style.display='block';
 }
 function handleNetMessage(msg){
   if(msg.type==='room_created'){
-    netRoomCode=msg.code; netId=msg.id; netIsHost=true;
+    netRoomCode=msg.code; netId=msg.id; myReady=false; roomReadyMap={};
     showOnlineWaiting();
   } else if(msg.type==='room_joined'){
-    netRoomCode=msg.code; netId=msg.id; netIsHost=false;
+    netRoomCode=msg.code; netId=msg.id; myReady=false; roomReadyMap={};
     netPlayers={};
     (msg.players||[]).forEach(p=>{ if(p.id!==netId) netPlayers[p.id]={id:p.id,name:p.name,x:40,y:50,dir:1,state:'idle',character:'ch_warrior'}; });
     showOnlineWaiting();
@@ -3460,7 +3431,7 @@ function handleNetMessage(msg){
   } else if(msg.type==='start_match'){
     beginOnlineMatch();
   } else if(msg.type==='zombie_state'){
-    // só chega pros CONVIDADOS (o host já sabe o estado de verdade, é ele quem manda)
+    // vem direto do SERVIDOR, pra todo mundo igual (ninguém é "host")
     if(msg.tm!==undefined) GS.zombieTimer=msg.tm;
     const seen={};
     for(const zd of msg.z){
@@ -3470,10 +3441,6 @@ function handleNetMessage(msg){
       e.x=zd.x; e.y=zd.y; e.hp=zd.h; e.maxHp=zd.m; e.dir=zd.d; e.state=zd.s; e.alive=true;
     }
     for(const e of enemies){ if(e.netId && !seen[e.netId]) e.alive=false; }
-  } else if(msg.type==='zombie_hit'){
-    // só chega pro HOST — é ele quem decide o dano de verdade
-    const e=enemies.find(x=>x.netId===msg.zombieId && x.alive);
-    if(e) hostApplyZombieDamage(e, msg.damage);
   } else if(msg.type==='zombie_died'){
     // chega pros CONVIDADOS quando o host mata um zumbi — todo mundo ganha a mesma recompensa
     GS.coins+=Math.round((msg.coins||0)*coinMultTotal());
@@ -3497,7 +3464,9 @@ function showOnlineWaiting(){
   document.getElementById('onlineWaitPanel').style.display='block';
   document.getElementById('onlineRoomCode').textContent=netRoomCode;
   document.getElementById('btnStartOnlineMatch').style.display='block';
-  myReady=false;
+  // NÃO zera myReady aqui — essa função também roda quando o jogador só está reabrindo
+  // a tela (sem sair da sala). Zerar aqui fazia o jogo "esquecer" que a pessoa já tinha
+  // marcado pronto, ficando diferente do que o servidor sabia (por isso não iniciava).
   updateOnlinePlayerList();
 }
 function toggleReady(){
@@ -3529,7 +3498,7 @@ function beginOnlineMatch(){
   GS.mode='online_zombie';
   GS.phase='playing';GS.score=0;GS.kills=0;GS.lives=3;GS.stage=1;GS.combo=0;GS.comboTimer=0;GS.ultimate=0;
   waveCount=0;bullets=[];particles.length=0;visualEffects=[];scheduledEffects=[];enemies=[];
-  GS.zombieTimer=0; GS.zombieSpawnTimer=1; netZombieBroadcastTimer=0; nextZombieNetId=1;
+  GS.zombieTimer=0; GS.zombieSpawnTimer=1;
   currentLevel=generateZombieArena();player=createPlayer();spawnCollectibles();
   hideAllScreens();
   document.getElementById('hud').style.display='flex';
@@ -3541,13 +3510,6 @@ function beginOnlineMatch(){
   notify('🧟 Conectado! Ajudem uns aos outros a sobreviver.');
   applyHudScale();
   setTimeout(()=>{ resizeCanvas(); applyHudScale(); },300);
-}
-// aplica dano de verdade num zumbi (só quem chama isso é o HOST, direto ou via zombie_hit)
-function hostApplyZombieDamage(e, dmg){
-  if(!e.alive) return;
-  e.hp-=dmg; e.hurtTimer=12; SFX.hit();
-  spawnParticles(e.x+e.w/2,e.y+e.h/2,5,'#ff6666',3,20);
-  if(e.hp<=0) killEnemy(e);
 }
 function updateOnlineMode(dt){
   netSendTimer-=dt;
@@ -3580,6 +3542,9 @@ function resumeGame(){ goFullscreenLandscape(); GS.phase='playing'; document.get
 function quitToMenu(){
   if(GS.score>GS.highScore){GS.highScore=GS.score;}
   saveGame();
+  // se tava numa partida online, avisa o servidor que saiu — senão vira um "fantasma"
+  // na sala, e os zumbis ficam perseguindo o lugar onde a pessoa parou pra sempre
+  if(GS.mode==='online_zombie' && netRoomCode) netLeaveRoom();
   document.getElementById('pauseScreen').style.display='none';
   document.getElementById('gameOverScreen').style.display='none';
   goFullscreenLandscape();
@@ -4274,17 +4239,27 @@ async function adminSendCurrency(){
   if(!targetId){ msgEl.textContent='[ERRO] digite o ID da conta'; return; }
   if(coins===0 && gems===0){ msgEl.textContent='[ERRO] digite quanto quer mandar'; return; }
   msgEl.textContent='Enviando...';
+  let resp;
   try{
-    const resp=await fetch(HTTP_URL+'/api/admin/send-currency', {method:'POST', headers:{'Content-Type':'application/json'},
+    resp=await fetch(HTTP_URL+'/api/admin/send-currency', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({adminUser:currentUser, adminPass:currentPassword, targetId, coins, gems})});
-    const data=await resp.json();
-    if(!resp.ok){ msgEl.textContent='[ERRO] '+(data.message||'não foi possível enviar'); return; }
-    msgEl.textContent=`[ OK ] Enviado pra ${data.username} (ID ${targetId}): +${coins}🪙 +${gems}💎`;
-    document.getElementById('adminSendCoins').value='';
-    document.getElementById('adminSendGems').value='';
   }catch(e){
-    msgEl.textContent='[ERRO] servidor offline ou sem conexão';
+    // isso aqui é uma falha de rede DE VERDADE (sem internet, ou o HTTP_URL/WS_URL nem existe)
+    msgEl.textContent='[ERRO] não consegui nem falar com o servidor — confira sua internet e o WS_URL no código.';
+    return;
   }
+  let data=null;
+  try{ data=await resp.json(); }
+  catch(e){
+    // o servidor respondeu, mas não em JSON — o caso mais comum disso é a rota ainda não
+    // existir no servidor publicado (ex: você atualizou o server.js mas não republicou/reiniciou)
+    msgEl.textContent='[ERRO] o servidor respondeu algo inesperado (status '+resp.status+'). Republique/reinicie o servidor com o server.js e db.js mais novos.';
+    return;
+  }
+  if(!resp.ok){ msgEl.textContent='[ERRO] '+(data.message||'não foi possível enviar'); return; }
+  msgEl.textContent=`[ OK ] Enviado pra ${data.username} (ID ${targetId}): +${coins}🪙 +${gems}💎`;
+  document.getElementById('adminSendCoins').value='';
+  document.getElementById('adminSendGems').value='';
 }
 setInterval(()=>{
   if(player&&GS.phase==='playing'){
