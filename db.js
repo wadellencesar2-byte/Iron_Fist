@@ -95,4 +95,20 @@ function getLeaderboard(limit = 20) {
   return list.slice(0, limit);
 }
 
-module.exports = { createUser, verifyLogin, saveProgress, getLeaderboard, findUser };
+function findUserById(id) {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+}
+
+// usado só pelo painel ADMIN: soma moedas/gemas na conta de alguém, direto pelo ID da conta
+function adminAddCurrency(targetId, coins, gems) {
+  const user = findUserById(targetId);
+  if (!user) return { ok: false, reason: 'not_found' };
+  let save = {};
+  try { save = JSON.parse(user.save_json || '{}'); } catch (e) {}
+  save.coins = Math.max(0, (save.coins || 0) + (coins || 0));
+  save.gems = Math.max(0, (save.gems || 0) + (gems || 0));
+  db.prepare('UPDATE users SET save_json = ? WHERE id = ?').run(JSON.stringify(save), user.id);
+  return { ok: true, username: user.username, coins: save.coins, gems: save.gems };
+}
+
+module.exports = { createUser, verifyLogin, saveProgress, getLeaderboard, findUser, findUserById, adminAddCurrency };

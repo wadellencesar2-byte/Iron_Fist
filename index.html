@@ -721,8 +721,9 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
       <div class="settings-card">
         <div class="settings-title">JOGADORES NA SALA</div>
         <div id="onlinePlayerList" style="font-size:11px;color:#ddd;line-height:1.8;"></div>
+        <div class="mode-desc" style="text-align:center;margin-top:4px;">A partida só começa quando TODO MUNDO estiver pronto.</div>
       </div>
-      <button class="menu-btn green btn-pill" id="btnStartOnlineMatch" style="margin-top:4px;">▶ COMEÇAR PARTIDA</button>
+      <button class="menu-btn green btn-pill" id="btnStartOnlineMatch" style="margin-top:4px;">✔ ESTOU PRONTO</button>
       <button class="menu-btn gray btn-pill" id="btnLeaveOnlineRoom" style="margin-top:8px;">SAIR DA SALA</button>
     </div>
     <button class="menu-btn gray" id="btnOnlineBack" style="margin-top:8px;">↩ VOLTAR</button>
@@ -832,6 +833,13 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
       <div class="admin-header admin-header-green"><span class="admin-blink-green">█</span> MODO ADMIN ATIVO <span class="admin-blink-green">█</span></div>
       <div class="admin-panel-title">PAINEL DE CHEATS</div>
       <div class="admin-cheat-list" id="adminCheatList"></div>
+      <div class="admin-panel-title" style="margin-top:10px;">💸 ENVIAR PARA UMA CONTA</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <input type="number" id="adminTargetId" class="login-input" placeholder="ID DA CONTA" style="border-color:#00ff41;">
+        <input type="number" id="adminSendCoins" class="login-input" placeholder="MOEDAS (0)" style="border-color:#00ff41;">
+        <input type="number" id="adminSendGems" class="login-input" placeholder="GEMAS (0)" style="border-color:#00ff41;">
+        <button class="admin-cancel-btn" id="btnAdminSend" style="color:#00ff41;border-color:#00ff4155;">💸 ENVIAR</button>
+      </div>
       <div id="adminStatusMsg" class="admin-status-msg"></div>
       <button class="admin-cancel-btn" id="btnAdminClose" style="margin-top:10px;">↩ FECHAR PAINEL</button>
     </div>
@@ -2187,9 +2195,11 @@ function playerAttack(){
 function playerShoot(){
   if(!player||player.dead||player.ammo<=0||GS.phase!=='playing')return;
   ensureAudio();player.ammo--;SFX.shoot();
-  bullets.push({x:player.x+(player.dir>0?player.w:0),y:player.y+10,vx:player.dir*250,vy:-5,life:80,fromPlayer:true,
+  const bx=player.x+(player.dir>0?player.w:0), by=player.y+10, bvx=player.dir*250, bvy=-5;
+  bullets.push({x:bx,y:by,vx:bvx,vy:bvy,life:80,fromPlayer:true,
     damage:(15+(petFX().rangedDmg||0)+(charFX().rangedDmg||0))*rageMult()});
   spawnParticles(player.x+(player.dir>0?player.w+2:-4),player.y+10,2,'#ff0',2,10);
+  if(GS.mode==='online_zombie') netSend({type:'bullet_fired', x:Math.round(bx), y:Math.round(by), vx:bvx, vy:bvy});
   updateHUD();
 }
 // ---------- sistema de efeitos visuais das ULTs (cada uma com ataque visual próprio) ----------
@@ -2911,15 +2921,16 @@ function updateEnemies(dt){
 
   if(GS.mode!=='zombie' && GS.mode!=='online_zombie' && enemies.length>0&&enemies.every(e=>!e.alive)){setTimeout(nextWave,1000);enemies=[];}
 }
-// só usado por CONVIDADOS: anima os zumbis replicados (sem decidir dano — isso é do host)
+// usado por todo mundo no modo online: só anima os zumbis (quem decide vida/morte é o SERVIDOR, igual pra todos)
 function animateReplicatedZombies(dt){
   for(const e of enemies){ if(!e.alive)continue; e.frame=(e.frame||0)+1; if(e.hurtTimer>0)e.hurtTimer--; }
 }
 
 function hitEnemy(e,dmg){
   if(!e.alive)return;
-  if(GS.mode==='online_zombie' && !netIsHost){
-    // não decido o dano aqui — só quem manda de verdade é o HOST, pra todo mundo ver o mesmo resultado
+  if(GS.mode==='online_zombie'){
+    // ninguém decide isso localmente — o SERVIDOR é quem decide o dano de verdade,
+    // igual pra todo mundo, não importa quem criou a sala
     netSend({type:'zombie_hit', zombieId:e.netId, damage:dmg});
     spawnParticles(e.x+e.w/2,e.y+e.h/2,5,'#ff6666',3,20);
     SFX.hit();
@@ -2936,10 +2947,6 @@ function killEnemy(e){
   addMissionProgress('kills',1);addMissionProgress('coins',e.coins);
   spawnParticles(e.x+e.w/2,e.y+e.h/2,15,'#ff4444',6,50);
   spawnCoinEffect(e.x+e.w/2,e.y+e.h/2);
-  if(GS.mode==='online_zombie' && netIsHost){
-    // avisa todo mundo da sala que esse zumbi morreu, pra todos ganharem a mesma recompensa
-    netSend({type:'zombie_died', coins:e.coins, points:e.points});
-  }
   if(e.explodesOnDeath){
     addFlash('#ff8a3a',0.18,6);
     addRing(e.x+e.w/2,e.y+e.h/2,'#ff5a1a',48,16,true);
@@ -2988,6 +2995,7 @@ function updateBullets(dt){
     b.x+=b.vx*dt;b.y+=b.vy*dt;b.life--;
     if(!b.pierce) b.vy+=50*dt;
     if(b.life<=0||solidAt(currentLevel,b.x,b.y)){spawnParticles(b.x,b.y,b.big?8:3,b.big?'#ff6a00':'#ff8800',b.big?4:2,10);bullets.splice(i,1);continue;}
+    if(b.remote) continue; // bala de outro jogador — só desenha e move, quem atirou já resolveu o dano
     if(b.fromPlayer){
       if(b.pierce){
         for(const e of enemies){
@@ -3350,15 +3358,22 @@ function spawnZombie(){
 function updateZombieMode(dt){
   GS.zombieTimer+=dt;
   GS.zombieSpawnTimer-=dt;
-  // no modo online co-op, mais jogadores na sala = mais zumbis vindo (nunca para)
-  const playerCount = (GS.mode==='online_zombie') ? (1+Object.keys(netPlayers).length) : 1;
-  const spawnInterval=Math.max(0.5, 2.2-GS.zombieTimer*0.015)/Math.sqrt(playerCount);
-  const aliveCap=40*playerCount;
+  const isOnline = GS.mode==='online_zombie';
+  // no modo online co-op, mais jogadores na sala = mais zumbis vindo (nunca para) —
+  // mas com um teto bem mais baixo que o solo, pra não pesar no celular de ninguém
+  // nem no tamanho da mensagem que viaja pela internet toda hora.
+  const playerCount = isOnline ? (1+Object.keys(netPlayers).length) : 1;
+  const spawnInterval = isOnline
+    ? Math.max(0.75, 2.4-GS.zombieTimer*0.012)/Math.sqrt(playerCount)
+    : Math.max(0.5, 2.2-GS.zombieTimer*0.015);
+  const aliveCap = isOnline ? Math.min(10*playerCount, 28) : 40;
   const aliveCount=enemies.reduce((n,e)=>n+(e.alive?1:0),0);
   if(GS.zombieSpawnTimer<=0 && aliveCount<aliveCap){
     GS.zombieSpawnTimer=spawnInterval;
-    const burst=Math.max(1,Math.round((1+Math.floor(GS.zombieTimer/45))*Math.max(1,playerCount*0.7)));
-    for(let i=0;i<Math.min(burst,5*playerCount);i++) spawnZombie();
+    const burst = isOnline
+      ? Math.min(2, 1+Math.floor(GS.zombieTimer/60))
+      : Math.max(1,Math.round((1+Math.floor(GS.zombieTimer/45))*Math.max(1,playerCount*0.7)));
+    for(let i=0;i<Math.min(burst, isOnline?3:5*playerCount);i++) spawnZombie();
   }
   const badge=document.getElementById('stageBadge'); if(badge) badge.textContent='🧟 '+formatTime(GS.zombieTimer);
   // limpeza de memória: só remove os já mortos, NUNCA um zumbi ainda vivo (esse era o bug de sumirem no meio do mapa)
@@ -3383,7 +3398,7 @@ function updateZombieMode(dt){
 // TROQUE ISSO pela URL do SEU servidor depois de publicar no Render.
 // Local pra testar: 'ws://localhost:3000'
 // No Render, sua URL vai ser algo como: 'wss://meu-jogo-servidor.onrender.com'
-const WS_URL = 'wss://iron-fist.onrender.com/';
+const WS_URL = 'wss://TROQUE-PELA-URL-DO-SEU-SERVIDOR.onrender.com';
 // mesma URL do servidor, só que em http(s) — usada pra login/conta/ranking (banco de dados)
 const HTTP_URL = WS_URL.replace(/^wss:/,'https:').replace(/^ws:/,'http:');
 
@@ -3415,7 +3430,7 @@ function netJoinRoom(){
 function netLeaveRoom(){
   netSend({type:'leave_room'});
   if(ws){ ws.close(); ws=null; }
-  netRoomCode=null; netId=null; netPlayers={}; netIsHost=false;
+  netRoomCode=null; netId=null; netPlayers={}; netIsHost=false; myReady=false; roomReadyMap={};
   document.getElementById('onlineWaitPanel').style.display='none';
   document.getElementById('onlineSetupPanel').style.display='block';
 }
@@ -3436,19 +3451,23 @@ function handleNetMessage(msg){
     const p=netPlayers[msg.id];
     if(p){ notify('👋 '+p.name+' saiu da sala.'); delete netPlayers[msg.id]; }
     updateOnlinePlayerList();
+  } else if(msg.type==='ready_update'){
+    roomReadyMap={};
+    (msg.players||[]).forEach(p=>{ roomReadyMap[p.id]=p; if(p.id===netId) myReady=p.ready; });
+    updateOnlinePlayerList();
   } else if(msg.type==='state_update'){
     if(netPlayers[msg.id]) Object.assign(netPlayers[msg.id], msg.state);
   } else if(msg.type==='start_match'){
     beginOnlineMatch();
   } else if(msg.type==='zombie_state'){
     // só chega pros CONVIDADOS (o host já sabe o estado de verdade, é ele quem manda)
-    if(msg.timer!==undefined) GS.zombieTimer=msg.timer;
+    if(msg.tm!==undefined) GS.zombieTimer=msg.tm;
     const seen={};
-    for(const zd of msg.zombies){
-      seen[zd.id]=true;
-      let e=enemies.find(x=>x.netId===zd.id);
-      if(!e){ e=createEnemy(zd.x,zd.y,zd.type); e.netId=zd.id; enemies.push(e); }
-      e.x=zd.x; e.y=zd.y; e.hp=zd.hp; e.maxHp=zd.maxHp; e.dir=zd.dir; e.state=zd.state; e.alive=true;
+    for(const zd of msg.z){
+      seen[zd.i]=true;
+      let e=enemies.find(x=>x.netId===zd.i);
+      if(!e){ e=createEnemy(zd.x,zd.y,zd.t); e.netId=zd.i; enemies.push(e); }
+      e.x=zd.x; e.y=zd.y; e.hp=zd.h; e.maxHp=zd.m; e.dir=zd.d; e.state=zd.s; e.alive=true;
     }
     for(const e of enemies){ if(e.netId && !seen[e.netId]) e.alive=false; }
   } else if(msg.type==='zombie_hit'){
@@ -3465,21 +3484,36 @@ function handleNetMessage(msg){
   } else if(msg.type==='player_hurt'){
     // o HOST decidiu que um zumbi me acertou de verdade — aplico o dano aqui
     if(player && !player.dead && player.invincible<=0) playerHurt(msg.damage);
+  } else if(msg.type==='bullet_fired'){
+    // tiro de outro jogador — só visual aqui, quem decide o dano é o jogador que atirou
+    bullets.push({x:msg.x,y:msg.y,vx:msg.vx,vy:msg.vy,life:80,fromPlayer:true,remote:true,damage:0});
   } else if(msg.type==='error'){
     document.getElementById('onlineError').textContent='❌ '+msg.message;
   }
 }
+let myReady=false, roomReadyMap={};
 function showOnlineWaiting(){
   document.getElementById('onlineSetupPanel').style.display='none';
   document.getElementById('onlineWaitPanel').style.display='block';
   document.getElementById('onlineRoomCode').textContent=netRoomCode;
-  document.getElementById('btnStartOnlineMatch').style.display=netIsHost?'block':'none';
+  document.getElementById('btnStartOnlineMatch').style.display='block';
+  myReady=false;
   updateOnlinePlayerList();
+}
+function toggleReady(){
+  netSend({type:'toggle_ready'});
 }
 function updateOnlinePlayerList(){
   const list=document.getElementById('onlinePlayerList'); if(!list)return;
-  const names=[netName+' (você)'+(netIsHost?' — HOST':''), ...Object.values(netPlayers).map(p=>p.name)];
-  list.innerHTML = names.map(n=>'👤 '+n).join('<br>');
+  const mine={id:netId, name:netName+' (você)', ready:myReady};
+  const others=Object.keys(roomReadyMap).filter(pid=>pid!==netId).map(pid=>roomReadyMap[pid]);
+  const all=[mine, ...others];
+  list.innerHTML = all.map(p=>{
+    const tag = p.ready ? '<span style="color:#7fff8a;">✔ PRONTO</span>' : '<span style="color:#ffb347;">…aguardando</span>';
+    return `👤 ${p.name} — ${tag}`;
+  }).join('<br>');
+  const btn=document.getElementById('btnStartOnlineMatch');
+  if(btn) btn.textContent = myReady ? '✔ PRONTO (toque pra cancelar)' : '✔ ESTOU PRONTO';
 }
 function openOnlineScreen(){
   GS.phase='online-setup';
@@ -3504,7 +3538,7 @@ function beginOnlineMatch(){
   document.getElementById('stageBadge').textContent='🧟 CO-OP ONLINE';
   document.getElementById('bossBar').style.display='none';
   updateHUD();showStageIntro('INVASÃO ZUMBI ONLINE',`Sala ${netRoomCode} — ${1+Object.keys(netPlayers).length} jogador(es)`);
-  notify(netIsHost? '🧟 Você é o HOST — seu jogo comanda a invasão!' : '🧟 Conectado! Ajude a sobreviver.');
+  notify('🧟 Conectado! Ajudem uns aos outros a sobreviver.');
   applyHudScale();
   setTimeout(()=>{ resizeCanvas(); applyHudScale(); },300);
 }
@@ -3518,21 +3552,16 @@ function hostApplyZombieDamage(e, dmg){
 function updateOnlineMode(dt){
   netSendTimer-=dt;
   if(netSendTimer<=0 && player){
-    netSendTimer=0.08; // ~12x por segundo
-    netSend({type:'state', state:{x:player.x,y:player.y,dir:player.dir,state:player.state,character:GS.equipped.character,dead:!!(player&&player.dead)}});
+    netSendTimer=0.1; // ~10x por segundo — leve o suficiente pra não pesar em celular fraco
+    netSend({type:'state', state:{x:Math.round(player.x),y:Math.round(player.y),dir:player.dir,state:player.state,character:GS.equipped.character,dead:!!(player&&player.dead)}});
   }
 }
 function updateOnlineZombieMode(dt){
   updateOnlineMode(dt); // continua mandando minha posição pros outros, igual sempre
-  if(netIsHost){
-    updateZombieMode(dt); // o host roda a invasão de verdade (spawna, escala com o tempo E com o nº de jogadores)
-    netZombieBroadcastTimer-=dt;
-    if(netZombieBroadcastTimer<=0){
-      netZombieBroadcastTimer=0.12; // ~8x por segundo
-      const zlist=enemies.filter(e=>e.alive).map(e=>({id:e.netId,type:e.type,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp,dir:e.dir,state:e.state}));
-      netSend({type:'zombie_state', zombies:zlist, timer:GS.zombieTimer});
-    }
-  }
+  // ninguém roda a invasão localmente — é o SERVIDOR que manda o estado dos zumbis pra
+  // todo mundo por igual (recebido em handleNetMessage). Aqui só limpamos a memória de
+  // vez em quando, senão uma partida longa ia deixando o jogo cada vez mais pesado.
+  if(enemies.length>60) enemies=enemies.filter(e=>e.alive);
   const badge=document.getElementById('stageBadge');
   if(badge) badge.textContent='🧟 '+formatTime(GS.zombieTimer)+' · '+(1+Object.keys(netPlayers).length)+'👤';
 }
@@ -4003,7 +4032,7 @@ function gameLoop(ts){
     updateCollectibles(dt);drawCollectibles();
     if(GS.phase==='playing'){
       updatePlayer(dt);
-      if(GS.mode==='online_zombie' && !netIsHost){ animateReplicatedZombies(dt); } else { updateEnemies(dt); }
+      if(GS.mode==='online_zombie'){ animateReplicatedZombies(dt); } else { updateEnemies(dt); }
       updateBullets(dt);updateScheduledEffects();updateVisualEffects();
       if(GS.mode==='zombie')updateZombieMode(dt);
       if(GS.mode==='online_zombie')updateOnlineZombieMode(dt);
@@ -4104,7 +4133,7 @@ addBtn('btnModesBack', closeModes);
 addBtn('btnOpenOnline', ()=>{ goFullscreenLandscape(); openOnlineScreen(); });
 addBtn('btnCreateRoom', netCreateRoom);
 addBtn('btnJoinRoom', netJoinRoom);
-addBtn('btnStartOnlineMatch', ()=>{ netSend({type:'start_match'}); beginOnlineMatch(); });
+addBtn('btnStartOnlineMatch', toggleReady);
 addBtn('btnLeaveOnlineRoom', netLeaveRoom);
 addBtn('btnOnlineBack', closeOnlineScreen);
 addBtn('pickClassic', ()=>selectMode('campaign'));
@@ -4142,14 +4171,15 @@ addBtn('btnVictoryMenu', quitToMenu);
 // ADMIN
 // ============================================================
 const ADMIN_PASS='1000';
-const ADMIN_CHEATS={infHp:false,infCoins:false,infGems:false,infAmmo:false};
+const ADMIN_CHEATS={infHp:false,infCoins:false,infGems:false,infAmmo:false,infUlt:false};
 let adminInput='';
 
 const ADMIN_ROWS=[
   {key:'infHp', icon:'❤️', name:'VIDA INFINITA'},
   {key:'infCoins', icon:'🪙', name:'MOEDAS INFINITAS'},
   {key:'infGems', icon:'💎', name:'GEMAS INFINITAS'},
-  {key:'infAmmo', icon:'🔫', name:'MUNIÇÃO INFINITA'}
+  {key:'infAmmo', icon:'🔫', name:'MUNIÇÃO INFINITA'},
+  {key:'infUlt', icon:'🌀', name:'ÚLT INFINITA'}
 ];
 function buildAdminRows(){
   const list=document.getElementById('adminCheatList');
@@ -4192,6 +4222,7 @@ addBtn('akDel', ()=>adminKey('del'));
 addBtn('akOk', ()=>adminKey('ok'));
 addBtn('btnAdminCancel', closeAdmin);
 addBtn('btnAdminClose', closeAdmin);
+addBtn('btnAdminSend', adminSendCurrency);
 function updateAdminDots(){
   const dots=document.getElementById('adminDots'); let s='';
   for(let i=0;i<4;i++)s+=(i<adminInput.length?'●':'○')+(i<3?' ':'');
@@ -4211,8 +4242,9 @@ function toggleCheat(key){
   if(ADMIN_CHEATS.infCoins){GS.coins=99999;updateHUD();}
   if(ADMIN_CHEATS.infGems){GS.gems=99999;updateHUD();}
   if(ADMIN_CHEATS.infAmmo&&player){player.ammo=player.maxAmmo;updateHUD();}
+  if(ADMIN_CHEATS.infUlt){GS.ultimate=GS.ultimateMax;updateHUD();}
   renderAdminCheats();
-  const names={infHp:'VIDA INFINITA',infCoins:'MOEDAS INFINITAS',infGems:'GEMAS INFINITAS',infAmmo:'MUNIÇÃO INFINITA'};
+  const names={infHp:'VIDA INFINITA',infCoins:'MOEDAS INFINITAS',infGems:'GEMAS INFINITAS',infAmmo:'MUNIÇÃO INFINITA',infUlt:'ÚLT INFINITA'};
   document.getElementById('adminStatusMsg').textContent=(ADMIN_CHEATS[key]?'[ ON ] ':'[OFF] ')+names[key];
 }
 function adminMaxUpgrades(){
@@ -4234,13 +4266,34 @@ function adminResetAccount(){
   document.getElementById('adminStatusMsg').textContent='[ OK ] CONTA RESETADA';
   notify('🗑️ CONTA RESETADA!');
 }
+async function adminSendCurrency(){
+  const msgEl=document.getElementById('adminStatusMsg');
+  const targetId=document.getElementById('adminTargetId').value;
+  const coins=parseInt(document.getElementById('adminSendCoins').value,10)||0;
+  const gems=parseInt(document.getElementById('adminSendGems').value,10)||0;
+  if(!targetId){ msgEl.textContent='[ERRO] digite o ID da conta'; return; }
+  if(coins===0 && gems===0){ msgEl.textContent='[ERRO] digite quanto quer mandar'; return; }
+  msgEl.textContent='Enviando...';
+  try{
+    const resp=await fetch(HTTP_URL+'/api/admin/send-currency', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({adminUser:currentUser, adminPass:currentPassword, targetId, coins, gems})});
+    const data=await resp.json();
+    if(!resp.ok){ msgEl.textContent='[ERRO] '+(data.message||'não foi possível enviar'); return; }
+    msgEl.textContent=`[ OK ] Enviado pra ${data.username} (ID ${targetId}): +${coins}🪙 +${gems}💎`;
+    document.getElementById('adminSendCoins').value='';
+    document.getElementById('adminSendGems').value='';
+  }catch(e){
+    msgEl.textContent='[ERRO] servidor offline ou sem conexão';
+  }
+}
 setInterval(()=>{
   if(player&&GS.phase==='playing'){
     if(ADMIN_CHEATS.infHp)player.hp=player.maxHp;
     if(ADMIN_CHEATS.infCoins)GS.coins=99999;
     if(ADMIN_CHEATS.infGems)GS.gems=99999;
     if(ADMIN_CHEATS.infAmmo)player.ammo=player.maxAmmo;
-    if(ADMIN_CHEATS.infHp||ADMIN_CHEATS.infAmmo)updateHUD();
+    if(ADMIN_CHEATS.infUlt)GS.ultimate=GS.ultimateMax;
+    if(ADMIN_CHEATS.infHp||ADMIN_CHEATS.infAmmo||ADMIN_CHEATS.infUlt)updateHUD();
   }
 },80);
 
