@@ -322,6 +322,16 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
 .big-action-col{display:flex;flex-direction:column;gap:8px;align-items:stretch;justify-content:center;height:100%;}
 .big-action-col .menu-btn{padding:16px 10px!important;font-size:13px!important;}
 .mode-current{text-align:center;color:#7fd7ff;font-size:9px;letter-spacing:1px;margin-top:2px;}
+@media (orientation:landscape) and (max-height:520px){
+  .settings-card{padding:8px;margin:5px auto;border-radius:7px;}
+  .settings-title{font-size:9px;margin-bottom:5px;}
+  .mode-desc{font-size:8px;line-height:1.3;}
+  .login-input{padding:7px 9px;font-size:10px;}
+  .setting-row{font-size:9px;margin:6px 0;}
+  #onlineSetupPanel .btn-pill,#onlineWaitPanel .btn-pill,.mode-pick .btn-pill{padding:7px 16px!important;font-size:9.5px!important;min-width:0!important;}
+  #onlineRoomCode{font-size:18px!important;letter-spacing:4px!important;}
+  #onlinePlayerList{font-size:9px!important;line-height:1.5!important;}
+}
 .setting-row b{color:#ffd700;}
 .setting-range{width:100%;accent-color:#00d5ff;touch-action:manipulation;}
 .mini-btn{background:#101018;border:1.5px solid #ffffff44;color:#fff;border-radius:8px;padding:10px 8px;
@@ -568,6 +578,7 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
             <button class="side-nav-btn" id="navVault">🗝️ <span>COFRE</span></button>
             <button class="side-nav-btn" id="navUpgrades">⬆ <span>UPGRADES</span></button>
             <button class="side-nav-btn" id="navMission">⭐ <span>MISSÃO</span></button>
+            <button class="side-nav-btn" id="navRanking">🏆 <span>RANKING</span></button>
             <button class="side-nav-btn" id="navSettings">⚙ <span>CONFIGURAÇÕES</span></button>
           </div>
           <div class="panel-card">
@@ -606,6 +617,15 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
       <div class="mission-count" id="lobbyMissionCount"></div>
     </div>
     <button class="menu-btn gray" id="btnMissionBack" style="margin-top:8px;">↩ VOLTAR</button>
+  </div>
+
+  <!-- RANKING -->
+  <div id="rankingScreen" class="screen" style="display:none;justify-content:center;">
+    <div class="screen-title">🏆 RANKING</div>
+    <div class="settings-card" style="width:min(380px,92vw);">
+      <div id="rankingList" style="font-size:11px;color:#ddd;line-height:2;text-align:left;">Carregando...</div>
+    </div>
+    <button class="menu-btn gray" id="btnRankingBack" style="margin-top:8px;">↩ VOLTAR</button>
   </div>
 
   <!-- LOJA -->
@@ -754,7 +774,7 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
     <button class="menu-btn gold" id="btnPauseShop">🛒 LOJA</button>
     <button class="menu-btn" id="btnPauseSettings">⚙ CONFIGURAÇÕES</button>
     <button class="menu-btn gray" id="btnPauseMenu">↩ MENU</button>
-    <button class="menu-btn admin-secret-btn" id="btnAdmin">⚙ ADMIN</button>
+    <button class="menu-btn admin-secret-btn" id="btnAdmin" style="display:none;">⚙ ADMIN</button>
   </div>
 
   <!-- GAME OVER -->
@@ -887,18 +907,38 @@ function getNextAccountId(){
 function bumpNextAccountId(usedId){
   try{ localStorage.setItem('ironFistNextId', String(usedId+1)); }catch(e){}
 }
-let currentUserId=null, currentAvatar='👊';
-function attemptLogin(){
-  const userEl=document.getElementById('loginUser');
-  const passEl=document.getElementById('loginPass');
-  const errEl=document.getElementById('loginError');
-  const user=(userEl.value||'').trim();
-  const pass=passEl.value||'';
-  errEl.textContent='';
-  if(!user||!pass){ errEl.textContent='✖ Preencha usuário e senha.'; return; }
+let currentUserId=null, currentAvatar='👊', currentPassword=null;
+const ADMIN_USERNAME='CESAR', ADMIN_PASSWORD='12345';
+let isAdminAccount=false;
+function checkAdminAccount(user,pass){
+  isAdminAccount = (String(user).trim().toUpperCase()===ADMIN_USERNAME && pass===ADMIN_PASSWORD);
+  const btn=document.getElementById('btnAdmin');
+  if(btn) btn.style.display = isAdminAccount ? 'block' : 'none';
+}
+// tenta logar/criar conta no BANCO DE DADOS do servidor. Retorna:
+// 'ok' | 'wrong_password' | 'name_taken' | 'server_error' | 'offline'
+async function tryServerLogin(user,pass){
+  try{
+    let resp = await fetch(HTTP_URL+'/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user,password:pass})});
+    if(resp.status===404){
+      // não existe ainda no banco — cria a conta agora (se o nome já existir com outra grafia, o servidor recusa)
+      resp = await fetch(HTTP_URL+'/api/register', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user,password:pass})});
+      if(resp.status===409) return 'name_taken';
+    }
+    if(resp.status===401) return 'wrong_password';
+    if(!resp.ok) return 'server_error';
+    const data = await resp.json();
+    currentUser=user; currentPassword=pass; currentUserId=data.id; currentAvatar=data.avatar||'👊';
+    applySaveData(data.save||{});
+    return 'ok';
+  }catch(e){
+    return 'offline'; // servidor não configurado/sem internet — usa a conta local do aparelho
+  }
+}
+function loginLocal(user,pass){
   const accs=loadAccounts();
   if(accs[user]){
-    if(accs[user].password!==pass){ errEl.textContent='✖ SENHA INCORRETA'; return; }
+    if(accs[user].password!==pass) return false;
     if(!accs[user].id){ accs[user].id=getNextAccountId(); bumpNextAccountId(accs[user].id); }
   } else {
     const newId=getNextAccountId();
@@ -906,9 +946,30 @@ function attemptLogin(){
     bumpNextAccountId(newId);
   }
   saveAccounts(accs);
-  currentUser=user;
+  currentUser=user; currentPassword=pass;
   currentUserId=accs[user].id;
   currentAvatar=accs[user].avatar||'👊';
+  return true;
+}
+async function attemptLogin(){
+  goFullscreenLandscape();
+  const userEl=document.getElementById('loginUser');
+  const passEl=document.getElementById('loginPass');
+  const errEl=document.getElementById('loginError');
+  const user=(userEl.value||'').trim();
+  const pass=passEl.value||'';
+  errEl.textContent='';
+  if(!user||!pass){ errEl.textContent='✖ Preencha usuário e senha.'; return; }
+  errEl.textContent='Conectando...';
+  const result = await tryServerLogin(user,pass);
+  if(result==='wrong_password'){ errEl.textContent='✖ SENHA INCORRETA'; return; }
+  if(result==='name_taken'){ errEl.textContent='✖ Esse nome de usuário já está em uso.'; return; }
+  if(result==='server_error'){ errEl.textContent='❌ Erro no servidor. Tente de novo.'; return; }
+  if(result==='offline'){
+    const ok=loginLocal(user,pass);
+    if(!ok){ errEl.textContent='✖ SENHA INCORRETA'; return; }
+  }
+  checkAdminAccount(user,pass);
   loadGame();
   showSplash();
 }
@@ -925,36 +986,48 @@ function showLogin(){
 }
 function saveGame(){
   if(!currentUser)return;
+  const saveObj = {
+    coins:GS.coins, gems:GS.gems, highScore:GS.highScore, totalKills:GS.totalKills, maxStage:GS.maxStage,
+    upgrades:GS.upgrades, owned:GS.owned, equipped:GS.equipped, settings:GS.settings,
+    achievements:GS.achievements, maxCombo:GS.maxCombo, missions:GS.missions, zombieBest:GS.zombieBest, selectedMode:GS.selectedMode
+  };
+  // sempre salva uma cópia local também — funciona mesmo sem servidor configurado
   try{
     const accs=loadAccounts();
-    if(!accs[currentUser]) accs[currentUser]={password:'', save:{}};
-    accs[currentUser].save={
-      coins:GS.coins, gems:GS.gems, highScore:GS.highScore, totalKills:GS.totalKills, maxStage:GS.maxStage,
-      upgrades:GS.upgrades, owned:GS.owned, equipped:GS.equipped, settings:GS.settings,
-      achievements:GS.achievements, maxCombo:GS.maxCombo, missions:GS.missions, zombieBest:GS.zombieBest, selectedMode:GS.selectedMode
-    };
+    if(!accs[currentUser]) accs[currentUser]={password:currentPassword||'', save:{}, avatar:currentAvatar};
+    accs[currentUser].save=saveObj;
     saveAccounts(accs);
   }catch(e){}
+  // e manda pro banco de dados do servidor, se tiver um configurado (não trava o jogo esperando resposta)
+  if(currentPassword!==null){
+    fetch(HTTP_URL+'/api/save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:currentUser, password:currentPassword, save:saveObj, avatar:currentAvatar})}).catch(()=>{});
+  }
+}
+function applySaveData(d){
+  if(!d) return;
+  if(d.coins!==undefined) GS.coins=d.coins;
+  if(d.gems!==undefined) GS.gems=d.gems;
+  if(d.highScore!==undefined) GS.highScore=d.highScore;
+  if(d.totalKills!==undefined) GS.totalKills=d.totalKills;
+  if(d.maxStage!==undefined) GS.maxStage=d.maxStage;
+  if(d.upgrades) GS.upgrades={...GS.upgrades,...d.upgrades};
+  if(d.owned) GS.owned=d.owned;
+  if(d.equipped) GS.equipped={...GS.equipped,...d.equipped};
+  if(d.settings) GS.settings={...GS.settings,...d.settings};
+  if(d.achievements) GS.achievements=d.achievements;
+  if(d.maxCombo) GS.maxCombo=d.maxCombo;
+  if(d.missions) GS.missions=d.missions;
+  if(d.zombieBest) GS.zombieBest=d.zombieBest;
+  if(d.selectedMode) GS.selectedMode=d.selectedMode;
 }
 function loadGame(){
+  // fallback local — o login já aplica os dados do servidor (banco de dados) quando ele está disponível
   if(!currentUser)return;
   try{
     const accs=loadAccounts();
     const d=(accs[currentUser]&&accs[currentUser].save)||{};
-    if(d.coins!==undefined) GS.coins=d.coins;
-    if(d.gems!==undefined) GS.gems=d.gems;
-    if(d.highScore!==undefined) GS.highScore=d.highScore;
-    if(d.totalKills!==undefined) GS.totalKills=d.totalKills;
-    if(d.maxStage!==undefined) GS.maxStage=d.maxStage;
-    if(d.upgrades) GS.upgrades={...GS.upgrades,...d.upgrades};
-    if(d.owned) GS.owned=d.owned;
-    if(d.equipped) GS.equipped={...GS.equipped,...d.equipped};
-    if(d.settings) GS.settings={...GS.settings,...d.settings};
-    if(d.achievements) GS.achievements=d.achievements;
-    if(d.maxCombo) GS.maxCombo=d.maxCombo;
-    if(d.missions) GS.missions=d.missions;
-    if(d.zombieBest) GS.zombieBest=d.zombieBest;
-    if(d.selectedMode) GS.selectedMode=d.selectedMode;
+    applySaveData(d);
   }catch(e){}
 }
 
@@ -2728,14 +2801,32 @@ function spawnWave(){
 }
 function getBossName(stage){return['💀 DARK THUG','🔥 IRON CRUSHER','⚡ DEATH LORD','💣 WAR MACHINE','🧊 FROST KING','🤖 CYBER TITAN','🐉 DRAGON FIST','👑 LORD ZERO','🌿 PÂNTANO REI','🗿 GUARDIÃO DE PEDRA','💎 SENHOR CRISTAL','🏔️ TITÃ DA MONTANHA','🌋 FÚRIA DO VULCÃO','☢️ MUTANTE TÓXICO','☁️ ARAUTO CELESTIAL','⚓ CAPITÃO FANTASMA','🏜️ SOMBRA DO DESFILADEIRO','🛰️ MÁQUINA ESPACIAL','❄️ REI DO GELO ETERNO','🏛️ GUARDIÃO ANCIÃO','🕸️ SENHOR DO ABISMO','🏝️ FÚRIA TROPICAL','🏭 COLOSSO DE FERRO','🦴 REI OSSUDO','💠 ENTIDADE DIGITAL'][(stage-1)%25];}
 
+function pickNearestTarget(ex,ey){
+  // no solo/campanha só existe o próprio jogador. No co-op online, o HOST escolhe
+  // o alvo mais perto entre ele mesmo e cada convidado, pra os zumbis perseguirem
+  // quem estiver mais próximo — não só sempre o host.
+  let best = {x:player.x+player.w/2, y:player.y+player.h/2, isHost:true, guestId:null, dead:!!player.dead};
+  if(GS.mode==='online_zombie' && netIsHost){
+    let bestDist = Math.hypot(best.x-ex, best.y-ey);
+    for(const gid in netPlayers){
+      const g=netPlayers[gid];
+      if(g.dead) continue;
+      const gx=(g.x||0)+8, gy=(g.y||0)+10;
+      const d=Math.hypot(gx-ex, gy-ey);
+      if(d<bestDist){ bestDist=d; best={x:gx,y:gy,isHost:false,guestId:gid,dead:false}; }
+    }
+  }
+  return best;
+}
 function updateEnemies(dt){
   if(!currentLevel||!player)return;
   const stagePower = Math.min(2.4, 1 + (GS.stage||1) * 0.045);
+  const isCoopHost = (GS.mode==='online_zombie' && netIsHost);
   const playerCx = player.x + player.w/2, playerCy = player.y + player.h/2;
 
-  function hasWallBetween(e){
+  function hasWallBetween(e,px,py){
     const ey = e.y + e.h/2;
-    const minX = Math.min(e.x + e.w/2, playerCx), maxX = Math.max(e.x + e.w/2, playerCx);
+    const minX = Math.min(e.x + e.w/2, px), maxX = Math.max(e.x + e.w/2, px);
     for(let x=minX; x<maxX; x+=TILE) if(solidAt(currentLevel, x, ey)) return true;
     return false;
   }
@@ -2754,12 +2845,14 @@ function updateEnemies(dt){
     if(e.attackCooldown>0)e.attackCooldown--;
     if(e.shootTimer>0)e.shootTimer--;
 
-    const px=playerCx, py=playerCy, ex=e.x+e.w/2, ey=e.y+e.h/2;
+    const ex=e.x+e.w/2, ey=e.y+e.h/2;
+    const target = isCoopHost ? pickNearestTarget(ex,ey) : {x:playerCx,y:playerCy,isHost:true,guestId:null,dead:!!player.dead};
+    const px=target.x, py=target.y;
     const dx=px-ex, dy=py-ey, dist=Math.hypot(dx,dy);
     // perseguir só depende da distância — "linha de visão" (parede no meio) só bloqueia o TIRO,
     // nunca impede o inimigo de vir na sua direção (senão ele fica "burro" perto de plataformas)
-    const seePlayer = dist < e.aggroRange && !player.dead;
-    const clearShot = !hasWallBetween(e);
+    const seePlayer = dist < e.aggroRange && !target.dead;
+    const clearShot = !hasWallBetween(e,px,py);
     const dirToPlayer = dx < 0 ? -1 : 1;
 
     if(e.frozen>0){
@@ -2773,7 +2866,9 @@ function updateEnemies(dt){
       if(e.onGround && !groundAhead(e,e.dir) && Math.abs(dy)<22){ e.vx = 0; e.dir *= -1; }
       if(dist < (e.type==='boss'?34:e.w+12) && e.attackCooldown<=0 && Math.abs(dy)<e.h+12){
         e.attackTimer = 16; e.attackCooldown = Math.max(24, 56 - (GS.stage||1)*2 - (e.type==='boss'?18:0)); e.state='attack';
-        if(!player.dead&&player.invincible<=0) playerHurt(e.damage * (e.type==='boss'?1.18:1));
+        const dmg = e.damage * (e.type==='boss'?1.18:1);
+        if(target.isHost){ if(!player.dead&&player.invincible<=0) playerHurt(dmg); }
+        else if(target.guestId){ netSend({type:'player_hurt', targetId:target.guestId, damage:dmg}); }
         spawnParticles(px,py,5,e.type==='boss'?'#ff0000':'#ff4444',3,20);
       }
       if(e.ranged && clearShot && e.shootTimer<=0 && dist<175 && Math.abs(dy)<80){
@@ -2792,7 +2887,7 @@ function updateEnemies(dt){
     }
 
     if(e.flies){
-      e.vy = Math.max(-70, Math.min(70, ((playerCy-6)-ey)*1.4 + Math.sin(e.frame*0.06)*18));
+      e.vy = Math.max(-70, Math.min(70, ((py-6)-ey)*1.4 + Math.sin(e.frame*0.06)*18));
     } else if(!e.onGround)e.vy+=350*dt;
     e.vy=Math.min(e.vy,320);
     e.x+=e.vx*dt;
@@ -2815,6 +2910,10 @@ function updateEnemies(dt){
   else if(bb) bb.style.display='none';
 
   if(GS.mode!=='zombie' && GS.mode!=='online_zombie' && enemies.length>0&&enemies.every(e=>!e.alive)){setTimeout(nextWave,1000);enemies=[];}
+}
+// só usado por CONVIDADOS: anima os zumbis replicados (sem decidir dano — isso é do host)
+function animateReplicatedZombies(dt){
+  for(const e of enemies){ if(!e.alive)continue; e.frame=(e.frame||0)+1; if(e.hurtTimer>0)e.hurtTimer--; }
 }
 
 function hitEnemy(e,dmg){
@@ -3093,7 +3192,7 @@ function showStageIntro(name,sub){
 // ============================================================
 // TELAS
 // ============================================================
-const SCREEN_IDS=['loginScreen','splashScreen','menuScreen','shopScreen','vaultScreen','upgradeScreen','settingsScreen','pauseScreen','gameOverScreen','victoryScreen','modesScreen','missionScreen','onlineScreen'];
+const SCREEN_IDS=['loginScreen','splashScreen','menuScreen','shopScreen','vaultScreen','upgradeScreen','settingsScreen','pauseScreen','gameOverScreen','victoryScreen','modesScreen','missionScreen','onlineScreen','rankingScreen'];
 function hideAllScreens(){ SCREEN_IDS.forEach(id=>{ document.getElementById(id).style.display='none'; }); }
 
 function showSplash(){
@@ -3285,6 +3384,8 @@ function updateZombieMode(dt){
 // Local pra testar: 'ws://localhost:3000'
 // No Render, sua URL vai ser algo como: 'wss://meu-jogo-servidor.onrender.com'
 const WS_URL = 'wss://iron-fist.onrender.com/';
+// mesma URL do servidor, só que em http(s) — usada pra login/conta/ranking (banco de dados)
+const HTTP_URL = WS_URL.replace(/^wss:/,'https:').replace(/^ws:/,'http:');
 
 let ws=null, netId=null, netRoomCode=null, netIsHost=false, netName='Jogador', netPlayers={}, netSendTimer=0;
 let netZombieBroadcastTimer=0, nextZombieNetId=1;
@@ -3361,6 +3462,9 @@ function handleNetMessage(msg){
     GS.kills++; GS.totalKills++;
     addMissionProgress('kills',1); addMissionProgress('coins',msg.coins||0);
     updateHUD();
+  } else if(msg.type==='player_hurt'){
+    // o HOST decidiu que um zumbi me acertou de verdade — aplico o dano aqui
+    if(player && !player.dead && player.invincible<=0) playerHurt(msg.damage);
   } else if(msg.type==='error'){
     document.getElementById('onlineError').textContent='❌ '+msg.message;
   }
@@ -3415,26 +3519,7 @@ function updateOnlineMode(dt){
   netSendTimer-=dt;
   if(netSendTimer<=0 && player){
     netSendTimer=0.08; // ~12x por segundo
-    netSend({type:'state', state:{x:player.x,y:player.y,dir:player.dir,state:player.state,character:GS.equipped.character}});
-  }
-}
-// versão enxuta pra CONVIDADOS: não simula IA do zumbi (isso é do host), só checa
-// se algum zumbi replicado está encostando no MEU jogador local, pra eu tomar dano
-function applyZombieContactDamage(dt){
-  if(!player||player.dead) return;
-  const playerCx=player.x+player.w/2, playerCy=player.y+player.h/2;
-  for(const e of enemies){
-    if(!e.alive) continue;
-    e.frame=(e.frame||0)+1;
-    if(e.hurtTimer>0) e.hurtTimer--;
-    if(e.localAttackCooldown===undefined) e.localAttackCooldown=Math.floor(Math.random()*30);
-    if(e.localAttackCooldown>0){ e.localAttackCooldown--; continue; }
-    const ex=e.x+e.w/2, ey=e.y+e.h/2;
-    const dist=Math.hypot(playerCx-ex, playerCy-ey);
-    if(dist < e.w+10 && Math.abs(playerCy-ey) < e.h+12){
-      if(player.invincible<=0) playerHurt(e.damage);
-      e.localAttackCooldown=40;
-    }
+    netSend({type:'state', state:{x:player.x,y:player.y,dir:player.dir,state:player.state,character:GS.equipped.character,dead:!!(player&&player.dead)}});
   }
 }
 function updateOnlineZombieMode(dt){
@@ -3791,6 +3876,32 @@ function showMission(){
 }
 function closeMission(){ showMenu(); }
 
+async function openRanking(){
+  GS.phase='ranking';
+  hideAllScreens();
+  document.getElementById('rankingScreen').style.display='flex';
+  const listEl=document.getElementById('rankingList');
+  listEl.textContent='Carregando...';
+  try{
+    const resp=await fetch(HTTP_URL+'/api/leaderboard');
+    if(!resp.ok) throw new Error('bad status');
+    const rows=await resp.json();
+    if(!rows || rows.length===0){ listEl.textContent='Ninguém no ranking ainda — seja o primeiro!'; return; }
+    const medals=['🥇','🥈','🥉'];
+    listEl.innerHTML = rows.map((r,i)=>{
+      const pos = medals[i] || ('#'+(i+1));
+      const you = (r.username && currentUser && r.username.toLowerCase()===currentUser.toLowerCase()) ? ' <span style="color:#7fd7ff;">(você)</span>' : '';
+      return `<div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,.08);padding:4px 0;">
+        <span>${pos} ${r.avatar||'👊'} ${(r.username||'?').toUpperCase()}${you}</span>
+        <span style="color:#ffd700;">${Math.round(r.highScore||0)}</span>
+      </div>`;
+    }).join('');
+  }catch(e){
+    listEl.textContent='❌ Não foi possível carregar o ranking (servidor offline ou sem conexão).';
+  }
+}
+function closeRanking(){ showMenu(); }
+
 // ---------- SETTINGS ----------
 let settingsFromPause=false;
 function openSettings(fromPause){
@@ -3817,7 +3928,9 @@ function renderSettings(){
 }
 function logout(){
   saveGame();
-  currentUser=null;
+  currentUser=null; currentPassword=null;
+  isAdminAccount=false;
+  const btn=document.getElementById('btnAdmin'); if(btn) btn.style.display='none';
   showLogin();
 }
 function openAvatarPicker(){ document.getElementById('avatarPicker').style.display='flex'; }
@@ -3890,7 +4003,7 @@ function gameLoop(ts){
     updateCollectibles(dt);drawCollectibles();
     if(GS.phase==='playing'){
       updatePlayer(dt);
-      if(GS.mode==='online_zombie' && !netIsHost){ applyZombieContactDamage(dt); } else { updateEnemies(dt); }
+      if(GS.mode==='online_zombie' && !netIsHost){ animateReplicatedZombies(dt); } else { updateEnemies(dt); }
       updateBullets(dt);updateScheduledEffects();updateVisualEffects();
       if(GS.mode==='zombie')updateZombieMode(dt);
       if(GS.mode==='online_zombie')updateOnlineZombieMode(dt);
@@ -3977,6 +4090,8 @@ addBtn('navUpgrades', ()=>{ goFullscreenLandscape(); openUpgrades(); });
 addBtn('navSettings', ()=>{ goFullscreenLandscape(); openSettings(false); });
 addBtn('navMission', ()=>{ goFullscreenLandscape(); showMission(); });
 addBtn('btnMissionBack', closeMission);
+addBtn('navRanking', ()=>{ goFullscreenLandscape(); openRanking(); });
+addBtn('btnRankingBack', closeRanking);
 
 document.querySelectorAll('#shopTabs .tab-btn').forEach(b=>b.addEventListener('click',()=>setShopTab(b.dataset.tab)));
 addBtn('btnShopBack', closeShop);

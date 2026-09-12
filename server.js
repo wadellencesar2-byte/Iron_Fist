@@ -20,11 +20,60 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const WebSocket = require('ws');
+const db = require('./db.js');
 
 const app = express();
+app.use(express.json()); // pra ler o corpo (JSON) das requisições de login/registro/save
 
 // serve o index.html (e qualquer outro arquivo que você colocar na mesma pasta)
 app.use(express.static(path.join(__dirname)));
+
+// ---- ROTAS DE CONTA (banco de dados) ----
+
+// cria uma conta nova. Dá erro 409 se o nome já existir (nomes repetidos são proibidos)
+app.post('/api/register', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password || String(username).trim().length < 2 || String(password).length < 3) {
+    return res.status(400).json({ message: 'Usuário precisa de ao menos 2 letras e senha ao menos 3 caracteres.' });
+  }
+  try {
+    const user = db.createUser(username, password);
+    res.json({ id: user.id, username: user.username, avatar: user.avatar, save: user.save });
+  } catch (e) {
+    if (e && e.code === 'name_taken') return res.status(409).json({ message: 'Esse nome de usuário já está em uso.' });
+    res.status(500).json({ message: 'Erro ao criar conta.' });
+  }
+});
+
+// login numa conta existente
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ message: 'Preencha usuário e senha.' });
+  const result = db.verifyLogin(username, password);
+  if (!result.ok) {
+    if (result.reason === 'not_found') return res.status(404).json({ message: 'Conta não encontrada.' });
+    return res.status(401).json({ message: 'Senha incorreta.' });
+  }
+  res.json({ id: result.id, username: result.username, avatar: result.avatar, save: result.save });
+});
+
+// salva o progresso (moedas, upgrades, etc.) — manda usuário+senha de novo pra confirmar que é você
+app.post('/api/save', (req, res) => {
+  const { username, password, save, avatar } = req.body || {};
+  if (!username || !password) return res.status(400).json({ message: 'Preencha usuário e senha.' });
+  const result = db.saveProgress(username, password, save, avatar);
+  if (!result.ok) return res.status(401).json({ message: 'Não foi possível salvar (login inválido).' });
+  res.json({ ok: true });
+});
+
+// ranking dos jogadores (por recorde de pontos)
+app.get('/api/leaderboard', (req, res) => {
+  try {
+    res.json(db.getLeaderboard(20));
+  } catch (e) {
+    res.status(500).json({ message: 'Erro ao buscar ranking.' });
+  }
+});
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -73,6 +122,13 @@ function sendToHost(code, obj) {
   if (!room) return;
   const hostP = room.players.get(room.hostId);
   if (hostP) send(hostP.ws, obj);
+}
+
+function sendToPlayer(code, targetId, obj) {
+  const room = rooms[code];
+  if (!room) return;
+  const p = room.players.get(targetId);
+  if (p) send(p.ws, obj);
 }
 
 wss.on('connection', (ws) => {
@@ -132,6 +188,10 @@ wss.on('connection', (ws) => {
     // ---- host avisando que um zumbi morreu — todo mundo ganha a mesma recompensa ----
     } else if (msg.type === 'zombie_died') {
       broadcastToRoom(ws.roomCode, { type: 'zombie_died', coins: msg.coins, points: msg.points }, id);
+
+    // ---- host avisando que um zumbi acertou um convidado específico ----
+    } else if (msg.type === 'player_hurt') {
+      sendToPlayer(ws.roomCode, msg.targetId, { type: 'player_hurt', damage: msg.damage });
     }
   });
 
