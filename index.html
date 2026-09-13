@@ -762,6 +762,7 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
       <div class="settings-title">👤 CONTA</div>
       <div class="setting-row"><span>Usuário</span><b id="settingsUserText">—</b></div>
       <div class="setting-row"><span>ID da conta</span><b id="settingsIdText">—</b></div>
+      <div class="setting-row"><span>Servidor</span><b id="settingsServerText">—</b></div>
       <button class="menu-btn gray" id="btnLogout" type="button" style="width:100%;margin-top:6px;">↪ TROCAR DE CONTA</button>
     </div>
 
@@ -915,7 +916,7 @@ function getNextAccountId(){
 function bumpNextAccountId(usedId){
   try{ localStorage.setItem('ironFistNextId', String(usedId+1)); }catch(e){}
 }
-let currentUserId=null, currentAvatar='👊', currentPassword=null;
+let currentUserId=null, currentAvatar='👊', currentPassword=null, serverOnline=null;
 const ADMIN_USERNAME='CESAR', ADMIN_PASSWORD='12345';
 let isAdminAccount=false;
 function checkAdminAccount(user,pass){
@@ -934,12 +935,14 @@ async function tryServerLogin(user,pass){
       if(resp.status===409) return 'name_taken';
     }
     if(resp.status===401) return 'wrong_password';
-    if(!resp.ok) return 'server_error';
+    if(!resp.ok){ serverOnline=false; return 'server_error'; }
     const data = await resp.json();
     currentUser=user; currentPassword=pass; currentUserId=data.id; currentAvatar=data.avatar||'👊';
     applySaveData(data.save||{});
+    serverOnline=true;
     return 'ok';
   }catch(e){
+    serverOnline=false;
     return 'offline'; // servidor não configurado/sem internet — usa a conta local do aparelho
   }
 }
@@ -976,6 +979,9 @@ async function attemptLogin(){
   if(result==='offline'){
     const ok=loginLocal(user,pass);
     if(!ok){ errEl.textContent='✖ SENHA INCORRETA'; return; }
+    // avisa BEM visível — sem isso a pessoa acha que tá tudo conectado e só descobre
+    // que o servidor nunca respondeu quando alguma função que precisa dele falhar
+    notify('⚠️ SEM CONEXÃO COM O SERVIDOR — jogando só local (WS_URL errado ou servidor fora do ar)');
   }
   checkAdminAccount(user,pass);
   loadGame();
@@ -3370,7 +3376,7 @@ function updateZombieMode(dt){
 // TROQUE ISSO pela URL do SEU servidor depois de publicar no Render.
 // Local pra testar: 'ws://localhost:3000'
 // No Render, sua URL vai ser algo como: 'wss://meu-jogo-servidor.onrender.com'
-const WS_URL = 'wss://iron-fist.onrender.com/';
+const WS_URL = 'wss://TROQUE-PELA-URL-DO-SEU-SERVIDOR.onrender.com';
 // mesma URL do servidor, só que em http(s) — usada pra login/conta/ranking (banco de dados)
 const HTTP_URL = WS_URL.replace(/^wss:/,'https:').replace(/^ws:/,'http:');
 
@@ -3918,6 +3924,12 @@ function renderSettings(){
   document.getElementById('btnLowMode').textContent=GS.settings.lowMode?'ON':'OFF';
   document.getElementById('settingsUserText').textContent=currentUser||'—';
   document.getElementById('settingsIdText').textContent=currentUserId?('#'+currentUserId):'—';
+  const svEl=document.getElementById('settingsServerText');
+  if(svEl){
+    if(serverOnline===true){ svEl.textContent='🟢 ONLINE (salvando no banco)'; svEl.style.color='#2ecc71'; }
+    else if(serverOnline===false){ svEl.textContent='🔴 OFFLINE (salvando só no aparelho)'; svEl.style.color='#ff6b6b'; }
+    else { svEl.textContent='—'; svEl.style.color='#ddd'; }
+  }
   applyHudScale();
 }
 function logout(){
